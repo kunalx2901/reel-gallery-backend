@@ -63,7 +63,22 @@ const uploadReel = async (req, res) => {
  */
 const getReels = async (req, res) => {
   try {
-    const reels = await getAllReels();
+    const rows = await getAllReels();
+
+    // format each row into a shape the frontend can consume easily
+    const reels = rows.map(r => ({
+      id: r.id,
+      videoUrl: r.video_url,
+      likes: r.likes,
+      views: r.views,
+      createdAt: r.created_at,
+      restaurant: {
+        id: r.restaurant_id,
+        name: r.restaurant_name,
+        location: r.restaurant_location,
+      },
+    }));
+
     return res.status(200).json({ success: true, data: reels });
   } catch (err) {
     console.error("getReels error:", err.message);

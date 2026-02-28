@@ -10,11 +10,21 @@ CREATE EXTENSION IF NOT EXISTS pgcrypto;
 -- Table: restaurants
 -- -----------------------------------------------
 CREATE TABLE IF NOT EXISTS restaurants (
-  id          UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
-  name        TEXT        NOT NULL,
-  location    TEXT,
-  description TEXT,
-  created_at  TIMESTAMP   DEFAULT NOW()
+  id              UUID          PRIMARY KEY DEFAULT gen_random_uuid(),
+  restaurant_name TEXT          NOT NULL,
+  location        TEXT,
+  description     TEXT,
+  video_url       TEXT,
+  thumbnail_url   TEXT,
+  cuisine         TEXT,
+  rating          DECIMAL(2,1)  DEFAULT 0.0,
+  review_count    INTEGER       DEFAULT 0,
+  price_range     TEXT,
+  hours           TEXT,
+  tags            TEXT[],
+  chef            TEXT,
+  established     TEXT,
+  created_at      TIMESTAMP     DEFAULT NOW()
 );
 
 -- -----------------------------------------------
