@@ -1,0 +1,395 @@
+╔══════════════════════════════════════════════════════════════════════════════════╗
+║              🍽️  REEL GALLERY BACKEND — COMPLETE FLOW GUIDE                     ║
+║                  Understanding every function, file, and data path              ║
+╚══════════════════════════════════════════════════════════════════════════════════╝
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  SECTION 1: FOLDER STRUCTURE EXPLAINED
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  reel-gallery-backend/
+  │
+  ├── server.js                 ← Entry point. Boots Express, registers middleware & routes.
+  │
+  ├── config/
+  │   ├── db.js                 ← Creates and exports a PostgreSQL connection pool (pg.Pool).
+  │   ├── cloudinary.js         ← Configures Cloudinary SDK using env variables.
+  │   └── multer.js             ← Configures Multer with memory storage (no disk writes).
+  │
+  ├── routes/
+  │   ├── restaurant.routes.js  ← Maps HTTP verbs + paths to restaurant controller functions.
+  │   └── reel.routes.js        ← Maps HTTP verbs + paths to reel controller functions.
+  │                               Also wires Multer middleware for the upload endpoint.
+  │
+  ├── controllers/
+  │   ├── restaurant.controller.js ← Business logic for restaurant endpoints.
+  │   └── reel.controller.js       ← Business logic for reel endpoints (incl. Cloudinary upload).
+  │
+  ├── models/
+  │   ├── restaurant.model.js   ← Raw SQL queries for the restaurants table.
+  │   └── reel.model.js         ← Raw SQL queries for the reels table.
+  │
+  ├── schema.sql                ← Run once to create tables in PostgreSQL.
+  ├── .env.example              ← Template for environment variables.
+  └── package.json              ← Project dependencies and npm scripts.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  SECTION 2: ALL FUNCTIONS EXPLAINED
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  ┌─────────────────────────────────────────────────────────────────┐
+  │  config/db.js                                                   │
+  ├─────────────────────────────────────────────────────────────────┤
+  │  pool (pg.Pool)                                                 │
+  │    → Creates a shared connection pool to PostgreSQL.            │
+  │    → All models import this pool to run queries.                │
+  │    → Reads DATABASE_URL from .env                               │
+  │    → In production: adds SSL config (required for Render/Neon)  │
+  └─────────────────────────────────────────────────────────────────┘
+
+  ┌─────────────────────────────────────────────────────────────────┐
+  │  config/cloudinary.js                                           │
+  ├─────────────────────────────────────────────────────────────────┤
+  │  cloudinary.config()                                            │
+  │    → Reads CLOUDINARY_CLOUD_NAME, API_KEY, API_SECRET from .env │
+  │    → Exports the configured Cloudinary v2 instance              │
+  └─────────────────────────────────────────────────────────────────┘
+
+  ┌─────────────────────────────────────────────────────────────────┐
+  │  config/multer.js                                               │
+  ├─────────────────────────────────────────────────────────────────┤
+  │  upload (multer instance)                                       │
+  │    → Uses memoryStorage() — file stays as Buffer in RAM         │
+  │    → Rejects non-video MIME types                               │
+  │    → Limits file size to 100 MB                                 │
+  │    → Exported and used as middleware in reel.routes.js          │
+  └─────────────────────────────────────────────────────────────────┘
+
+  ┌─────────────────────────────────────────────────────────────────┐
+  │  models/restaurant.model.js                                     │
+  ├─────────────────────────────────────────────────────────────────┤
+  │  createRestaurant({ name, location, description })              │
+  │    → Runs INSERT INTO restaurants ... RETURNING *               │
+  │    → UUID generated by PostgreSQL gen_random_uuid()             │
+  │    → Returns the newly created restaurant row                   │
+  │                                                                 │
+  │  getAllRestaurants()                                             │
+  │    → Runs SELECT * FROM restaurants ORDER BY created_at DESC    │
+  │    → Returns array of all restaurant rows                       │
+  └─────────────────────────────────────────────────────────────────┘
+
+  ┌─────────────────────────────────────────────────────────────────┐
+  │  models/reel.model.js                                           │
+  ├─────────────────────────────────────────────────────────────────┤
+  │  createReel({ restaurantId, videoUrl })                         │
+  │    → Runs INSERT INTO reels ... RETURNING *                     │
+  │    → Stores Cloudinary secure_url as video_url                  │
+  │    → Returns the newly created reel row                         │
+  │                                                                 │
+  │  getAllReels()                                                   │
+  │    → JOINs reels with restaurants                               │
+  │    → Returns id, video_url, likes, views, created_at,          │
+  │              restaurant_name, restaurant_location               │
+  │    → Sorted newest first                                        │
+  │                                                                 │
+  │  incrementViews(id)                                             │
+  │    → UPDATE reels SET views = views + 1 WHERE id = $1          │
+  │    → Returns updated reel row (or undefined if not found)       │
+  │                                                                 │
+  │  incrementLikes(id)                                             │
+  │    → UPDATE reels SET likes = likes + 1 WHERE id = $1          │
+  │    → Returns updated reel row (or undefined if not found)       │
+  └─────────────────────────────────────────────────────────────────┘
+
+  ┌─────────────────────────────────────────────────────────────────┐
+  │  controllers/restaurant.controller.js                           │
+  ├─────────────────────────────────────────────────────────────────┤
+  │  addRestaurant(req, res)                                        │
+  │    → Validates that `name` exists in req.body                   │
+  │    → Calls createRestaurant() model function                    │
+  │    → Returns 201 + created restaurant                           │
+  │    → Returns 400 if name missing, 500 on DB error               │
+  │                                                                 │
+  │  getRestaurants(req, res)                                       │
+  │    → Calls getAllRestaurants() model function                    │
+  │    → Returns 200 + array of restaurants                         │
+  └─────────────────────────────────────────────────────────────────┘
+
+  ┌─────────────────────────────────────────────────────────────────┐
+  │  controllers/reel.controller.js                                 │
+  ├─────────────────────────────────────────────────────────────────┤
+  │  uploadToCloudinary(buffer)   [private helper]                  │
+  │    → Wraps cloudinary.uploader.upload_stream in a Promise       │
+  │    → Pipes the in-memory Buffer directly to Cloudinary          │
+  │    → resource_type: "video", folder: "reel-gallery"             │
+  │    → Returns Cloudinary result (includes secure_url)            │
+  │                                                                 │
+  │  uploadReel(req, res)                                           │
+  │    → Validates restaurantId exists in req.body                  │
+  │    → Validates req.file exists (Multer puts file here)          │
+  │    → Calls uploadToCloudinary(req.file.buffer)                  │
+  │    → Calls createReel() with restaurantId + secure_url          │
+  │    → Returns 201 + created reel                                 │
+  │    → Returns 400 if fields missing, 500 on upload/DB error      │
+  │                                                                 │
+  │  getReels(req, res)                                             │
+  │    → Calls getAllReels() model function                          │
+  │    → Returns 200 + enriched reel array                          │
+  │                                                                 │
+  │  viewReel(req, res)                                             │
+  │    → Extracts id from req.params                                │
+  │    → Calls incrementViews(id)                                   │
+  │    → Returns 200 + updated reel, or 404 if not found            │
+  │                                                                 │
+  │  likeReel(req, res)                                             │
+  │    → Extracts id from req.params                                │
+  │    → Calls incrementLikes(id)                                   │
+  │    → Returns 200 + updated reel, or 404 if not found            │
+  └─────────────────────────────────────────────────────────────────┘
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  SECTION 3: ARCHITECTURE DIAGRAM
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  CLIENT (Mobile App / Web / Postman)
+       │
+       │  HTTP Request (JSON or multipart/form-data)
+       ▼
+  ┌────────────────────────────────────────────────────────────┐
+  │                        server.js                           │
+  │   - Loads .env                                             │
+  │   - Boots Express                                          │
+  │   - Registers CORS, express.json()                         │
+  │   - Mounts /api/restaurants → restaurant.routes.js         │
+  │   - Mounts /api/reels       → reel.routes.js               │
+  └───────────────────────┬────────────────────────────────────┘
+                          │
+          ┌───────────────┴────────────────────┐
+          ▼                                    ▼
+  ┌───────────────────┐             ┌──────────────────────┐
+  │ restaurant.routes │             │    reel.routes       │
+  │                   │             │                      │
+  │ POST /            │             │ POST /               │
+  │  → addRestaurant  │             │  → Multer middleware │
+  │                   │             │  → uploadReel        │
+  │ GET  /            │             │                      │
+  │  → getRestaurants │             │ GET  /               │
+  └────────┬──────────┘             │  → getReels          │
+           │                        │                      │
+           │                        │ POST /:id/view       │
+           │                        │  → viewReel          │
+           │                        │                      │
+           │                        │ POST /:id/like       │
+           │                        │  → likeReel          │
+           │                        └──────────┬───────────┘
+           │                                   │
+           ▼                                   ▼
+  ┌────────────────────────┐    ┌──────────────────────────────┐
+  │  restaurant.controller │    │      reel.controller         │
+  │                        │    │                              │
+  │  addRestaurant()       │    │  uploadReel()                │
+  │   → validates name     │    │   → validates fields         │
+  │   → calls model        │    │   → calls uploadToCloudinary │
+  │                        │    │   → calls model              │
+  │  getRestaurants()      │    │                              │
+  │   → calls model        │    │  getReels()                  │
+  │                        │    │   → calls model              │
+  └──────────┬─────────────┘    │                              │
+             │                  │  viewReel() / likeReel()     │
+             │                  │   → calls model              │
+             │                  └──────────┬───────────────────┘
+             │                             │
+             │              ┌──────────────┴──────────────────┐
+             │              │                                 │
+             │              ▼                                 ▼
+             │    ┌──────────────────┐          ┌────────────────────┐
+             │    │   Cloudinary     │          │   reel.model.js    │
+             │    │   (video CDN)    │          │                    │
+             │    │                  │          │  createReel()      │
+             │    │ upload_stream()  │          │  getAllReels()      │
+             │    │  ← Buffer from   │          │  incrementViews()  │
+             │    │    Multer        │          │  incrementLikes()  │
+             │    │  → secure_url    │          └────────┬───────────┘
+             │    └──────────────────┘                   │
+             │                                           │
+             ▼                                           ▼
+  ┌───────────────────────┐              ┌───────────────────────────┐
+  │ restaurant.model.js   │              │       PostgreSQL DB        │
+  │                       │              │                           │
+  │  createRestaurant()   │◄────────────►│  TABLE: restaurants       │
+  │  getAllRestaurants()   │              │    id, name, location,    │
+  │                       │              │    description, created_at│
+  └───────────────────────┘              │                           │
+                                         │  TABLE: reels             │
+                                         │    id, restaurant_id,     │
+                                         │    video_url, likes,      │
+                                         │    views, created_at      │
+                                         └───────────────────────────┘
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  SECTION 4: REQUEST LIFECYCLE — STEP BY STEP
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  Example: POST /api/reels (upload a video reel)
+
+  Step 1  → Client sends multipart/form-data with `video` + `restaurantId`
+  Step 2  → Express receives request, routes to reel.routes.js
+  Step 3  → Multer middleware runs first:
+              - Reads the file from the request stream
+              - Stores it in memory as req.file.buffer
+  Step 4  → uploadReel() controller is called
+  Step 5  → Validates restaurantId and req.file exist
+  Step 6  → Calls uploadToCloudinary(req.file.buffer)
+              - Creates a Cloudinary upload stream
+              - Pipes the buffer into it
+              - Cloudinary processes and stores the video
+              - Returns { secure_url, public_id, ... }
+  Step 7  → Calls createReel({ restaurantId, videoUrl: secure_url })
+              - Runs SQL INSERT into reels table
+              - Returns the new reel row
+  Step 8  → Controller sends 201 response with reel data
+  Step 9  → Client receives { success: true, data: { id, video_url, ... } }
+
+
+  Example: GET /api/reels
+
+  Step 1  → Client sends GET /api/reels
+  Step 2  → Routes to getReels() controller
+  Step 3  → Calls getAllReels() model function
+  Step 4  → SQL JOIN query runs:
+              SELECT r.*, res.name, res.location FROM reels r
+              JOIN restaurants res ON r.restaurant_id = res.id
+              ORDER BY r.created_at DESC
+  Step 5  → Returns array of enriched reel objects
+  Step 6  → Controller sends 200 response with array
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  SECTION 5: API REFERENCE QUICK CARD
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  METHOD  ENDPOINT                  BODY / PARAMS               RETURNS
+  ──────  ────────────────────────  ──────────────────────────  ──────────────────────
+  POST    /api/restaurants          JSON: name, location, desc  201 + restaurant object
+  GET     /api/restaurants          —                           200 + array
+  POST    /api/reels                form-data: video, restaurantId  201 + reel object
+  GET     /api/reels                —                           200 + enriched array
+  POST    /api/reels/:id/view       URL param: id               200 + updated reel
+  POST    /api/reels/:id/like       URL param: id               200 + updated reel
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  SECTION 6: HOW TO RUN LOCALLY
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  Prerequisites:
+    - Node.js v18+
+    - PostgreSQL running locally (or use Neon.tech free tier)
+    - Cloudinary account (free tier is fine)
+
+  Steps:
+
+  1. Clone or download the project
+       cd reel-gallery-backend
+
+  2. Install dependencies
+       npm install
+
+  3. Set up environment variables
+       cp .env.example .env
+       # Fill in DATABASE_URL and Cloudinary credentials
+
+  4. Create database tables
+       Open your PostgreSQL client (psql or pgAdmin or Neon dashboard)
+       Copy and paste the contents of schema.sql and run it
+
+  5. Start the server
+       Development (with auto-reload):
+         npm run dev
+
+       Production:
+         npm start
+
+  6. Test with Postman or curl
+       POST http://localhost:5000/api/restaurants
+         Body (JSON): { "name": "La Bella", "location": "Mumbai" }
+
+       POST http://localhost:5000/api/reels
+         Body (form-data):
+           restaurantId: <uuid from above>
+           video: <select a .mp4 file>
+
+       GET  http://localhost:5000/api/reels
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  SECTION 7: HOW TO DEPLOY ON RENDER
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  Step 1: Push code to GitHub
+    git init
+    git add .
+    git commit -m "initial commit"
+    git remote add origin https://github.com/YOUR_USERNAME/reel-gallery-backend.git
+    git push -u origin main
+
+  Step 2: Create PostgreSQL database on Render
+    → Go to render.com → New → PostgreSQL
+    → Note the "External Database URL" — this is your DATABASE_URL
+
+  Step 3: Run schema.sql on the Render DB
+    → In Render dashboard, open the database shell
+    → Paste and run the contents of schema.sql
+
+  Step 4: Create a Web Service on Render
+    → New → Web Service → Connect your GitHub repo
+    → Settings:
+        Runtime:      Node
+        Build Command: npm install
+        Start Command: npm start
+    → Add Environment Variables:
+        NODE_ENV              = production
+        DATABASE_URL          = (paste from Step 2)
+        CLOUDINARY_CLOUD_NAME = your_value
+        CLOUDINARY_API_KEY    = your_value
+        CLOUDINARY_API_SECRET = your_value
+
+  Step 5: Deploy
+    → Click "Create Web Service"
+    → Render builds and deploys automatically
+    → Your API is live at: https://your-service-name.onrender.com
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  SECTION 8: KEY DESIGN DECISIONS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  1. MEMORY STORAGE (not disk storage) for Multer
+     → Files never touch the server's disk
+     → Buffer is piped directly to Cloudinary via upload_stream
+     → This works on Render (which has an ephemeral filesystem)
+
+  2. upload_stream wrapped in a Promise
+     → Cloudinary's upload_stream uses callbacks, not Promises
+     → We wrap it so we can use async/await cleanly in the controller
+
+  3. PostgreSQL UUID via gen_random_uuid()
+     → IDs are generated by the DB, not the app layer
+     → Safer, avoids ID conflicts in distributed scenarios
+
+  4. ON DELETE CASCADE on reels.restaurant_id
+     → Deleting a restaurant auto-deletes all its reels
+     → No orphan data
+
+  5. Connection pooling (pg.Pool)
+     → Efficient: reuses connections instead of creating one per query
+     → Handles concurrent requests properly
+
+  6. SSL forced in production
+     → Render, Neon, Supabase all require SSL for DB connections
+     → The { rejectUnauthorized: false } flag handles self-signed certs
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
